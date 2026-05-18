@@ -18,6 +18,8 @@ if (window.__ILABEL_SNIPER_RUNNING__) {
     let waitingRefreshAfterHit = false;
     let answeringTask = false;
     let manuallyStarted = false;
+    let refreshLockUntil = 0;
+    let pageReloading = false;
 
     let lastRefreshClickAt = 0;
 
@@ -34,52 +36,8 @@ if (window.__ILABEL_SNIPER_RUNNING__) {
         return match ? parseInt(match[1]) : null;
     }
 
-    function isQueueSelectPage() {
-        return !!document.querySelector('input[placeholder="输入队列ID"]')
-            && !!document.querySelector('button.el-button--primary');
-    }
-
-    async function recoverQueueAndEnter() {
-        if (!isQueueSelectPage()) return;
-
-        const allCfg = await new Promise(resolve => chrome.storage.local.get(null, resolve));
-        const enabledEntry = Object.entries(allCfg).find(([k, v]) =>
-            k.startsWith('page_') && v && v.enabled && Number(v.missionId)
-        );
-        if (!enabledEntry) return;
-
-        const [, cfg] = enabledEntry;
-        const targetMissionId = String(cfg.missionId);
-
-        const rows = [...document.querySelectorAll('tr.el-table__row')];
-        for (const row of rows) {
-            const idCell = row.querySelector('td.el-table_24_column_88 .cell');
-            if (!idCell) continue;
-            const rowId = (idCell.textContent || '').trim();
-            if (rowId === targetMissionId) {
-                const doBtn = [...row.querySelectorAll('button')].find(b =>
-                    (b.textContent || '').trim() === '做题'
-                );
-                if (doBtn) {
-                    updatePanel(`🔁 回到队列 ${targetMissionId}`);
-                    doBtn.click();
-                }
-                return;
-            }
-        }
-    }
-
     const currentMissionId = extractMissionIdFromUrl();
-    if (!currentMissionId) {
-        setTimeout(() => {
-            recoverQueueAndEnter();
-        }, 600);
-        return;
-    }
-
-    const LAST_TASK_KEY = `ilabel_last_task_${currentMissionId}`;
-    const POST_HIT_REFRESH_KEY = `ilabel_post_hit_refresh_${currentMissionId}`;
-    lastTaskId = sessionStorage.getItem(LAST_TASK_KEY);
+    if (!currentMissionId) return;
 
     const LAST_TASK_KEY = `ilabel_last_task_${currentMissionId}`;
     const POST_HIT_REFRESH_KEY = `ilabel_post_hit_refresh_${currentMissionId}`;
@@ -168,9 +126,12 @@ if (window.__ILABEL_SNIPER_RUNNING__) {
                     POST_HIT_REFRESH_KEY,
                     JSON.stringify({ taskId: state.taskId, remaining: remain - 1 })
                 );
+              pageReloading = true;
+               refreshLockUntil = Date.now() + 5000;
+
                 setTimeout(() => {
                     window.location.replace(window.location.href);
-                }, 100);
+                }, 150);
                 return;
             }
 
@@ -182,6 +143,11 @@ if (window.__ILABEL_SNIPER_RUNNING__) {
 
     async function fetchTask() {
         try {
+
+// 🔴 强制刷新期：禁止任何抢题请求
+        if (pageReloading || Date.now() < refreshLockUntil) {
+            return { gotTask: false };
+        }
 
             if (waitingRefreshAfterHit || answeringTask) return { gotTask: false };
 
@@ -219,21 +185,30 @@ if (window.__ILABEL_SNIPER_RUNNING__) {
 
             const list = json?.data || [];
 
-            if (list.length > 0) {
-                const task = list[0];
+           if (list.length > 0) {
+    const task = list[0];
 
-                if (task.id !== lastTaskId) {
+    const now = Date.now();
+
+    // 🔴 刷新冷却锁（防止刷新回来重复触发）
+    if (now < refreshLockUntil) {
+        return { gotTask: false };
+    }
+
+   if (task.id && String(task.id) !== String(lastTaskId)) {
                     lastTaskId = task.id;
                     sessionStorage.setItem(LAST_TASK_KEY, String(task.id));
                     successCount++;
 
                     updatePanel('✅ 抢到题');
                     saveStats();
+                    // 🔴 防止刷新回来再次触发同一题刷新
+                    refreshLockUntil = Date.now() + 5000;
 
-                    // 成功抢题后仅自动刷新两次
+                    // 成功抢题后仅自动刷新1次
                     sessionStorage.setItem(
                         POST_HIT_REFRESH_KEY,
-                        JSON.stringify({ taskId: task.id, remaining: 2 })
+                        JSON.stringify({ taskId: task.id, remaining: 1 })
                     );
                     runPostHitRefreshIfNeeded();
 
@@ -254,63 +229,83 @@ if (window.__ILABEL_SNIPER_RUNNING__) {
         }
     }
 
-    async function loop() {
-        while (true) {
-            const key = getPageKey();
-            const cfg = await new Promise(r =>
-                chrome.storage.local.get([key], d => r(d[key] || {}))
-            );
+   async function loop() {
 
-            polling = cfg.enabled || false;
+    while (true) {
 
-            // 修复点：如果 storage 里开启了，就视为手动已开启
-            // 解决刷新页面后变量丢失的问题
-            if (polling) manuallyStarted = true; 
+        const key = getPageKey();
 
-            if (polling && manuallyStarted) {
-                const hasSubmit = hasSubmitButton();
-                const refreshBtnExists = [...document.querySelectorAll('button')]
-                    .some(b => b.innerText && b.innerText.trim() === '刷新');
+        const cfg = await new Promise(r =>
+            chrome.storage.local.get([key], d => r(d[key] || {}))
+        );
 
-                if (answeringTask || hasSubmit) {
-                    // 场景：正在做题
-                    if (hasSubmit) {
-                        answeringTask = true; 
-                        updatePanel('📝 做题中');
-                        dynamicDelay = 1000; // 做题时没必要刷那么快
-                    } else if (refreshBtnExists) {
-                        // 场景：刚提交完，看到刷新按钮了
-                        answeringTask = false;
-                        waitingRefreshAfterHit = false;
-                        updatePanel('✅ 提交成功，准备下单');
-                        dynamicDelay = POLL_INTERVAL;
-                    } else {
-                        updatePanel('⏳ 等待页面响应');
-                        dynamicDelay = 500;
-                    }
+        polling = cfg.enabled || false;
+
+        // 刷新页面后保持开启
+        if (polling) manuallyStarted = true;
+
+        if (polling && manuallyStarted) {
+
+            const hasSubmit = hasSubmitButton();
+
+            // 正在做题
+            if (answeringTask || hasSubmit) {
+
+                if (hasSubmit) {
+
+                    answeringTask = true;
+
+                    updatePanel('📝 做题中');
+
+                    dynamicDelay = 1000;
+
                 } else {
-                    // 核心修复点：添加抢题入口！
-                    const result = await fetchTask();
-                    
-                    if (result && result.gotTask) {
-                        // 如果抢到了，fetchTask 里已经写了 location.replace
-                        // 这里的代码可能不会被执行，因为页面正在跳转
-                        updatePanel('🚀 抢到了！刷新中');
-                    } else if (result && result.rateLimited) {
-                        // 限流状态，fetchTask 已经调整了 dynamicDelay
-                    } else {
-                        updatePanel('▶️ 抢题中');
-                        dynamicDelay = POLL_INTERVAL;
-                    }
+
+                    // 提交按钮消失 = 已提交
+                    answeringTask = false;
+
+                    updatePanel('✅ 已提交，继续抢题');
+
+                    dynamicDelay = POLL_INTERVAL;
                 }
+
             } else {
-                updatePanel(polling ? '⏸️ 待手动开启' : '⏹️ 已停止');
-                dynamicDelay = 1000;
+
+                // 抢题逻辑
+                const result = await fetchTask();
+
+                if (result && result.gotTask) {
+
+                    updatePanel('🚀 抢到了！刷新中');
+
+                } else if (result && result.rateLimited) {
+
+                    // 限流状态
+
+                } else {
+
+                    updatePanel('▶️ 抢题中');
+
+                    dynamicDelay = POLL_INTERVAL;
+                }
             }
 
-            await new Promise(r => setTimeout(r, dynamicDelay));
+        } else {
+
+            updatePanel(
+                polling
+                    ? '⏸️ 待手动开启'
+                    : '⏹️ 已停止'
+            );
+
+            dynamicDelay = 1000;
         }
+
+        await new Promise(r =>
+            setTimeout(r, dynamicDelay)
+        );
     }
+}
 
     function bindHotkey() {
         document.addEventListener('keydown', e => {
@@ -349,6 +344,10 @@ if (window.__ILABEL_SNIPER_RUNNING__) {
 
         updatePanel('⏸️ 待手动开启');
         loop();
+   setTimeout(() => {
+            pageReloading = false;
+            console.log('[Content] 🔓 页面加载保护期结束，重置 pageReloading 状态');
+        }, 6000);
     });
 
 })();
