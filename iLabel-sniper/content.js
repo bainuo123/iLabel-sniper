@@ -34,8 +34,52 @@ if (window.__ILABEL_SNIPER_RUNNING__) {
         return match ? parseInt(match[1]) : null;
     }
 
+    function isQueueSelectPage() {
+        return !!document.querySelector('input[placeholder="输入队列ID"]')
+            && !!document.querySelector('button.el-button--primary');
+    }
+
+    async function recoverQueueAndEnter() {
+        if (!isQueueSelectPage()) return;
+
+        const allCfg = await new Promise(resolve => chrome.storage.local.get(null, resolve));
+        const enabledEntry = Object.entries(allCfg).find(([k, v]) =>
+            k.startsWith('page_') && v && v.enabled && Number(v.missionId)
+        );
+        if (!enabledEntry) return;
+
+        const [, cfg] = enabledEntry;
+        const targetMissionId = String(cfg.missionId);
+
+        const rows = [...document.querySelectorAll('tr.el-table__row')];
+        for (const row of rows) {
+            const idCell = row.querySelector('td.el-table_24_column_88 .cell');
+            if (!idCell) continue;
+            const rowId = (idCell.textContent || '').trim();
+            if (rowId === targetMissionId) {
+                const doBtn = [...row.querySelectorAll('button')].find(b =>
+                    (b.textContent || '').trim() === '做题'
+                );
+                if (doBtn) {
+                    updatePanel(`🔁 回到队列 ${targetMissionId}`);
+                    doBtn.click();
+                }
+                return;
+            }
+        }
+    }
+
     const currentMissionId = extractMissionIdFromUrl();
-    if (!currentMissionId) return;
+    if (!currentMissionId) {
+        setTimeout(() => {
+            recoverQueueAndEnter();
+        }, 600);
+        return;
+    }
+
+    const LAST_TASK_KEY = `ilabel_last_task_${currentMissionId}`;
+    const POST_HIT_REFRESH_KEY = `ilabel_post_hit_refresh_${currentMissionId}`;
+    lastTaskId = sessionStorage.getItem(LAST_TASK_KEY);
 
     const LAST_TASK_KEY = `ilabel_last_task_${currentMissionId}`;
     const POST_HIT_REFRESH_KEY = `ilabel_post_hit_refresh_${currentMissionId}`;
