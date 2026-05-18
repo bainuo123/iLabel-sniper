@@ -125,7 +125,7 @@ if (window.__ILABEL_SNIPER_RUNNING__) {
                     JSON.stringify({ taskId: state.taskId, remaining: remain - 1 })
                 );
                 setTimeout(() => {
-                    silentReloadPage();
+                    window.location.replace(window.location.href);
                 }, 100);
                 return;
             }
