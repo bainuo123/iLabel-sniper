@@ -81,6 +81,10 @@ if (window.__ILABEL_SNIPER_RUNNING__) {
     const POST_HIT_REFRESH_KEY = `ilabel_post_hit_refresh_${currentMissionId}`;
     lastTaskId = sessionStorage.getItem(LAST_TASK_KEY);
 
+    const LAST_TASK_KEY = `ilabel_last_task_${currentMissionId}`;
+    const POST_HIT_REFRESH_KEY = `ilabel_post_hit_refresh_${currentMissionId}`;
+    lastTaskId = sessionStorage.getItem(LAST_TASK_KEY);
+
     function getPageKey() {
         return `page_${currentMissionId}`;
     }
@@ -165,7 +169,7 @@ if (window.__ILABEL_SNIPER_RUNNING__) {
                     JSON.stringify({ taskId: state.taskId, remaining: remain - 1 })
                 );
                 setTimeout(() => {
-                    silentReloadPage();
+                    window.location.replace(window.location.href);
                 }, 100);
                 return;
             }
