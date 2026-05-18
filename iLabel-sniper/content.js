@@ -37,6 +37,10 @@ if (window.__ILABEL_SNIPER_RUNNING__) {
     const currentMissionId = extractMissionIdFromUrl();
     if (!currentMissionId) return;
 
+    const LAST_TASK_KEY = `ilabel_last_task_${currentMissionId}`;
+    const POST_HIT_REFRESH_KEY = `ilabel_post_hit_refresh_${currentMissionId}`;
+    lastTaskId = sessionStorage.getItem(LAST_TASK_KEY);
+
     function getPageKey() {
         return `page_${currentMissionId}`;
     }
@@ -58,6 +62,7 @@ if (window.__ILABEL_SNIPER_RUNNING__) {
                 padding: 16px;
                 z-index: 999999;
                 font-size: 12px;
+                display: none;
             `;
 
             panel.innerHTML = `
@@ -107,6 +112,30 @@ if (window.__ILABEL_SNIPER_RUNNING__) {
         window.location.reload();
     }
 
+    function runPostHitRefreshIfNeeded() {
+        try {
+            const raw = sessionStorage.getItem(POST_HIT_REFRESH_KEY);
+            if (!raw) return;
+            const state = JSON.parse(raw);
+            const remain = Number(state?.remaining) || 0;
+
+            if (remain > 0) {
+                sessionStorage.setItem(
+                    POST_HIT_REFRESH_KEY,
+                    JSON.stringify({ taskId: state.taskId, remaining: remain - 1 })
+                );
+                setTimeout(() => {
+                    silentReloadPage();
+                }, 100);
+                return;
+            }
+
+            sessionStorage.removeItem(POST_HIT_REFRESH_KEY);
+        } catch (_) {
+            sessionStorage.removeItem(POST_HIT_REFRESH_KEY);
+        }
+    }
+
     async function fetchTask() {
         try {
 
@@ -151,15 +180,18 @@ if (window.__ILABEL_SNIPER_RUNNING__) {
 
                 if (task.id !== lastTaskId) {
                     lastTaskId = task.id;
+                    sessionStorage.setItem(LAST_TASK_KEY, String(task.id));
                     successCount++;
 
                     updatePanel('✅ 抢到题');
                     saveStats();
 
-                    // ✅ 关键修复：必须整页刷新（你的场景必须 DOM 重载）
-                    setTimeout(() => {
-                         window.location.replace(window.location.href);
-}, 100);
+                    // 成功抢题后仅自动刷新两次
+                    sessionStorage.setItem(
+                        POST_HIT_REFRESH_KEY,
+                        JSON.stringify({ taskId: task.id, remaining: 2 })
+                    );
+                    runPostHitRefreshIfNeeded();
 
                     return { gotTask: true };
                 }
@@ -263,6 +295,7 @@ if (window.__ILABEL_SNIPER_RUNNING__) {
 
     createPanel();
     bindHotkey();
+    runPostHitRefreshIfNeeded();
 
     chrome.storage.local.get([getPageKey()], res => {
         const cfg = res[getPageKey()] || {};
